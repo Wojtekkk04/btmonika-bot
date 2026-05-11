@@ -1,68 +1,12 @@
-import { readFile } from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
+import { KNOWLEDGE } from "./knowledge.js";
 
 const MODEL = "gemini-2.5-flash-lite";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const ALLOWED_ORIGINS = [
   "https://btmonika.com",
   "https://www.btmonika.com",
   "http://localhost:3000"
 ];
-
-let cachedKnowledge = null;
-
-async function getKnowledge() {
-  if (cachedKnowledge) {
-    return cachedKnowledge;
-  }
-
-  const possiblePaths = [
-    path.join(__dirname, "..", "knowledge.md"),
-    path.join(process.cwd(), "knowledge.md"),
-    path.join(process.cwd(), "btmonika-bot", "knowledge.md"),
-    path.join(process.cwd(), "btmonika-bot", "btmonika-bot", "knowledge.md"),
-    path.join(process.cwd(), "btmonika-bot", "btmonika-bot", "btmonika-bot", "knowledge.md")
-  ];
-
-  for (const filePath of possiblePaths) {
-    try {
-      cachedKnowledge = await readFile(filePath, "utf8");
-      console.log("Knowledge loaded from:", filePath);
-      return cachedKnowledge;
-    } catch (error) {
-      // Sprawdzamy kolejną możliwą lokalizację pliku.
-    }
-  }
-
-  console.error("Knowledge file not found. Checked paths:", possiblePaths);
-
-  // Awaryjna baza, żeby bot nie wywalał błędu 500, nawet jeśli plik knowledge.md nie zostanie znaleziony.
-  cachedKnowledge = `
-# Awaryjna baza wiedzy BT Monika
-
-BT Monika to lokalna firma zajmująca się przewozem osób.
-
-Firma oferuje:
-- przewozy lokalne i regionalne,
-- bilety miesięczne,
-- przewozy szkolne,
-- wycieczki,
-- przewozy grupowe,
-- wynajem autobusów i busów.
-
-Kontakt:
-Telefon: 605 551 105
-E-mail: btmonika@onet.eu
-
-Jeśli użytkownik pyta o ceny, dokładne godziny odjazdów, dostępność terminów lub rezerwację, nie wymyślaj danych. Skieruj go do kontaktu z firmą.
-`;
-
-  return cachedKnowledge;
-}
 
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
@@ -96,53 +40,28 @@ function normalizeHistory(history) {
     }));
 }
 
-function buildSystemPrompt(knowledge) {
+function buildSystemPrompt() {
   return `
 Jesteś wirtualnym asystentem strony internetowej BT Monika.
 
-Twoim zadaniem jest pomagać użytkownikom strony w sprawach związanych z firmą BT Monika.
+Odpowiadasz użytkownikom strony na pytania związane z firmą BT Monika, przewozami, biletami, rozkładami, wycieczkami, wynajmem autobusów i kontaktem.
 
 ODPOWIADAJ ZAWSZE PO POLSKU.
 
-================================
-NAJWAŻNIEJSZE ZASADY
-================================
-
+NAJWAŻNIEJSZE ZASADY:
 1. Odpowiadaj krótko, jasno, konkretnie i uprzejmie.
-2. Korzystaj przede wszystkim z bazy wiedzy podanej niżej.
+2. Korzystaj z bazy wiedzy podanej niżej.
 3. Nie wymyślaj cen, dokładnych godzin odjazdów, tras, numerów przystanków, dostępności pojazdów ani terminów.
-4. Jeśli użytkownik pyta o cenę, dokładną godzinę, dostępność terminu, rezerwację lub szczegóły wymagające potwierdzenia, skieruj go do kontaktu z firmą.
+4. Jeśli pytanie dotyczy ceny, dokładnej godziny, dostępności terminu, rezerwacji lub płatności, odpowiedz ostrożnie i skieruj do właściwej zakładki strony lub kontaktu z firmą.
 5. Nie odsyłaj do telefonu, jeśli możesz normalnie odpowiedzieć z bazy wiedzy.
-6. Jeśli nie masz dokładnej informacji, powiedz to uczciwie.
-7. Nie udawaj pracownika firmy, który może potwierdzić rezerwację.
-8. Nie obiecuj, że firma oddzwoni, jeśli system realnie nie wysyła zgłoszenia.
-9. Nie odpowiadaj na tematy niezwiązane z BT Monika.
-10. Jeśli pytanie jest niezwiązane z firmą, odpowiedz:
-"Pomagam głównie w sprawach związanych z BT Monika: przejazdami, biletami, rozkładami, przewozami grupowymi i kontaktem z firmą."
+6. Nie udawaj pracownika firmy, który może potwierdzić rezerwację.
+7. Nie obiecuj, że firma oddzwoni, jeśli system realnie nie wysyła zgłoszenia.
+8. Jeśli użytkownik pyta o coś niezwiązanego z BT Monika, odpowiedz krótko, że pomagasz głównie w sprawach związanych z przejazdami, biletami, rozkładami i usługami BT Monika.
+9. Nie zaczynaj każdej odpowiedzi od „Jako asystent” ani „Jako sztuczna inteligencja”.
+10. Jeśli nie masz dokładnej informacji, powiedz to uczciwie.
 
-================================
-JAK ODPOWIADAĆ
-================================
-
-Dobry styl:
-- prosty język,
-- krótkie zdania,
-- pomocny ton,
-- bez przesadnego formalizmu.
-
-Nie zaczynaj każdej odpowiedzi od:
-- "Jako asystent..."
-- "Jako sztuczna inteligencja..."
-- "Niestety nie jestem w stanie..."
-
-Zamiast tego odpowiadaj naturalnie, np.:
-"Tak, BT Monika realizuje przewozy grupowe. Do wyceny najlepiej przygotować datę, trasę i liczbę osób."
-
-================================
-BAZA WIEDZY
-================================
-
-${knowledge}
+BAZA WIEDZY:
+${KNOWLEDGE}
 `;
 }
 
@@ -164,6 +83,7 @@ export default async function handler(req, res) {
 
     if (!apiKey) {
       console.error("Missing GEMINI_API_KEY");
+
       return res.status(500).json({
         error: "Brakuje GEMINI_API_KEY w ustawieniach Vercel."
       });
@@ -182,9 +102,6 @@ export default async function handler(req, res) {
         error: "Wiadomość jest za długa."
       });
     }
-
-    const knowledge = await getKnowledge();
-    const systemPrompt = buildSystemPrompt(knowledge);
 
     const contents = normalizeHistory(history);
 
@@ -209,7 +126,7 @@ export default async function handler(req, res) {
           systemInstruction: {
             parts: [
               {
-                text: systemPrompt
+                text: buildSystemPrompt()
               }
             ]
           },
