@@ -1,7 +1,11 @@
 import { readFile } from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 
 const MODEL = "gemini-2.5-flash-lite";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const ALLOWED_ORIGINS = [
   "https://btmonika.com",
@@ -16,8 +20,47 @@ async function getKnowledge() {
     return cachedKnowledge;
   }
 
-  const knowledgePath = path.join(process.cwd(), "knowledge.md");
-  cachedKnowledge = await readFile(knowledgePath, "utf8");
+  const possiblePaths = [
+    path.join(__dirname, "..", "knowledge.md"),
+    path.join(process.cwd(), "knowledge.md"),
+    path.join(process.cwd(), "btmonika-bot", "knowledge.md"),
+    path.join(process.cwd(), "btmonika-bot", "btmonika-bot", "knowledge.md"),
+    path.join(process.cwd(), "btmonika-bot", "btmonika-bot", "btmonika-bot", "knowledge.md")
+  ];
+
+  for (const filePath of possiblePaths) {
+    try {
+      cachedKnowledge = await readFile(filePath, "utf8");
+      console.log("Knowledge loaded from:", filePath);
+      return cachedKnowledge;
+    } catch (error) {
+      // Sprawdzamy kolejną możliwą lokalizację pliku.
+    }
+  }
+
+  console.error("Knowledge file not found. Checked paths:", possiblePaths);
+
+  // Awaryjna baza, żeby bot nie wywalał błędu 500, nawet jeśli plik knowledge.md nie zostanie znaleziony.
+  cachedKnowledge = `
+# Awaryjna baza wiedzy BT Monika
+
+BT Monika to lokalna firma zajmująca się przewozem osób.
+
+Firma oferuje:
+- przewozy lokalne i regionalne,
+- bilety miesięczne,
+- przewozy szkolne,
+- wycieczki,
+- przewozy grupowe,
+- wynajem autobusów i busów.
+
+Kontakt:
+Telefon: 605 551 105
+E-mail: btmonika@onet.eu
+
+Jeśli użytkownik pyta o ceny, dokładne godziny odjazdów, dostępność terminów lub rezerwację, nie wymyślaj danych. Skieruj go do kontaktu z firmą.
+`;
+
   return cachedKnowledge;
 }
 
@@ -55,23 +98,50 @@ function normalizeHistory(history) {
 
 function buildSystemPrompt(knowledge) {
   return `
-Jesteś wirtualnym asystentem strony BT Monika.
+Jesteś wirtualnym asystentem strony internetowej BT Monika.
 
-Masz odpowiadać użytkownikom wyłącznie na podstawie poniższej bazy wiedzy oraz zasad bezpieczeństwa.
+Twoim zadaniem jest pomagać użytkownikom strony w sprawach związanych z firmą BT Monika.
 
-NAJWAŻNIEJSZE ZASADY:
-1. Odpowiadaj zawsze po polsku.
-2. Odpowiadaj krótko, jasno i pomocnie.
-3. Nie wymyślaj cen, godzin odjazdów, tras, dostępności pojazdów ani szczegółów, których nie ma w bazie wiedzy.
-4. Jeśli użytkownik pyta o dokładną cenę, godzinę, dostępność terminu lub rezerwację, skieruj go do formularza na stronie albo do kontaktu telefonicznego.
-5. Nie mów ciągle "proszę zadzwonić", jeśli możesz odpowiedzieć na podstawie bazy wiedzy.
-6. Jeśli pytanie jest niezwiązane z BT Monika, uprzejmie napisz, że pomagasz w sprawach przejazdów, biletów, rozkładów i usług BT Monika.
-7. Nie udawaj, że rezerwujesz przejazd. Możesz tylko pomóc przygotować informacje do zapytania.
-8. Nie obiecuj, że firma oddzwoni, jeśli system realnie nie wysyła zgłoszenia do firmy.
-9. Jeśli użytkownik poda dane osobowe, nie powtarzaj ich niepotrzebnie i nie proś o więcej danych niż potrzeba.
-10. Jeśli brakuje informacji, powiedz to uczciwie.
+ODPOWIADAJ ZAWSZE PO POLSKU.
 
-BAZA WIEDZY:
+================================
+NAJWAŻNIEJSZE ZASADY
+================================
+
+1. Odpowiadaj krótko, jasno, konkretnie i uprzejmie.
+2. Korzystaj przede wszystkim z bazy wiedzy podanej niżej.
+3. Nie wymyślaj cen, dokładnych godzin odjazdów, tras, numerów przystanków, dostępności pojazdów ani terminów.
+4. Jeśli użytkownik pyta o cenę, dokładną godzinę, dostępność terminu, rezerwację lub szczegóły wymagające potwierdzenia, skieruj go do kontaktu z firmą.
+5. Nie odsyłaj do telefonu, jeśli możesz normalnie odpowiedzieć z bazy wiedzy.
+6. Jeśli nie masz dokładnej informacji, powiedz to uczciwie.
+7. Nie udawaj pracownika firmy, który może potwierdzić rezerwację.
+8. Nie obiecuj, że firma oddzwoni, jeśli system realnie nie wysyła zgłoszenia.
+9. Nie odpowiadaj na tematy niezwiązane z BT Monika.
+10. Jeśli pytanie jest niezwiązane z firmą, odpowiedz:
+"Pomagam głównie w sprawach związanych z BT Monika: przejazdami, biletami, rozkładami, przewozami grupowymi i kontaktem z firmą."
+
+================================
+JAK ODPOWIADAĆ
+================================
+
+Dobry styl:
+- prosty język,
+- krótkie zdania,
+- pomocny ton,
+- bez przesadnego formalizmu.
+
+Nie zaczynaj każdej odpowiedzi od:
+- "Jako asystent..."
+- "Jako sztuczna inteligencja..."
+- "Niestety nie jestem w stanie..."
+
+Zamiast tego odpowiadaj naturalnie, np.:
+"Tak, BT Monika realizuje przewozy grupowe. Do wyceny najlepiej przygotować datę, trasę i liczbę osób."
+
+================================
+BAZA WIEDZY
+================================
+
 ${knowledge}
 `;
 }
@@ -93,6 +163,7 @@ export default async function handler(req, res) {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
+      console.error("Missing GEMINI_API_KEY");
       return res.status(500).json({
         error: "Brakuje GEMINI_API_KEY w ustawieniach Vercel."
       });
@@ -145,7 +216,7 @@ export default async function handler(req, res) {
           contents,
           generationConfig: {
             temperature: 0.25,
-            maxOutputTokens: 600
+            maxOutputTokens: 700
           }
         })
       }
@@ -155,9 +226,10 @@ export default async function handler(req, res) {
 
     if (!geminiResponse.ok) {
       console.error("Gemini error:", JSON.stringify(data));
+
       return res.status(500).json({
         error: "Błąd połączenia z Gemini.",
-        details: data?.error?.message || "Nieznany błąd"
+        details: data?.error?.message || "Nieznany błąd Gemini."
       });
     }
 
