@@ -1,4 +1,4 @@
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -8,46 +8,42 @@ export default async function handler(req, res) {
   const { history } = req.body;
   const key = process.env.GEMINI_API_KEY;
 
-  const systemText = `Jesteś pomocnym asystentem firmy BT Monika - rodzinnego przedsiębiorstwa transportowego działającego od 1991 roku w okolicach Szczecinka. Firma oferuje: przewóz osób na trasie Szczecinek-Czarne przez Gwdę, bilety miesięczne i eKartę z ulgami, przewozy szkolne i dla firm, wycieczki krajowe i zagraniczne, wynajem autobusów i busów. Odpowiadaj TYLKO na pytania o firmę BT Monika. Jeśli pytanie nie dotyczy firmy, grzecznie odmów. Odpowiadaj po polsku, krótko i przyjaźnie.`;
+  const systemText = 'Jestes pomocnym asystentem firmy BT Monika - przedsiebiorstwa transportowego od 1991 roku. Firma oferuje: przewoz osob na trasie Szczecinek-Czarne przez Gwde, bilety miesięczne, przewozy szkolne, wycieczki, wynajem autobusow. Odpowiadaj TYLKO na pytania o firme BT Monika. Jezeli pytanie nie dotyczy firmy, grzecznie odmow. Odpowiadaj po polsku, krotko i przyjazni.';
 
-  // Budujemy historię z instrukcją systemową jako pierwsza wiadomość
-  const contents = [];
-  
-  // Dodaj system prompt jako pierwszą wymianę
-  contents.push({ role: 'user', parts: [{ text: 'Kim jesteś i co robisz?' }] });
-  contents.push({ role: 'model', parts: [{ text: systemText }] });
-  
-  // Dodaj historię rozmowy
+  const contents = [
+    { role: 'user', parts: [{ text: 'Kim jestes?' }] },
+    { role: 'model', parts: [{ text: systemText }] }
+  ];
+
   if (history && history.length > 0) {
-    for (const msg of history) {
-      contents.push(msg);
+    for (var i = 0; i < history.length; i++) {
+      contents.push(history[i]);
     }
   }
 
   try {
-    const response = await fetch(
-      `https://`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
+    var response = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + key,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents, generationConfig: { maxOutputTokens: 500 } })
+        body: JSON.stringify({ contents: contents })
       }
     );
 
-    const data = await response.json();
-    console.log('Gemini response status:', response.status);
-    console.log('Gemini data:', JSON.stringify(data).substring(0, 500));
+    var data = await response.json();
 
     if (data.error) {
-      console.error('Gemini error:', data.error);
+      console.error('Gemini error:', JSON.stringify(data.error));
       return res.status(500).json({ error: data.error.message });
     }
 
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Przepraszam, spróbuj ponownie.';
-    res.status(200).json({ reply });
+    var reply = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] ? data.candidates[0].content.parts[0].text : 'Przepraszam, sprobuj ponownie.';
+    res.status(200).json({ reply: reply });
 
   } catch (err) {
-    console.error('Fetch error:', err.message);
+    console.error('Error:', err.message);
     res.status(500).json({ error: err.message });
   }
-}
+};
+
