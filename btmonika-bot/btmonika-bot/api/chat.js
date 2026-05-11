@@ -1,4 +1,4 @@
-import { KNOWLEDGE } from "./knowledge.js";
+import { KNOWLEDGE } from "../knowledge.js";
 
 const MODEL = "gemini-2.5-flash-lite";
 
