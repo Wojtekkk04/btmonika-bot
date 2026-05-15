@@ -3,6 +3,8 @@ import { KNOWLEDGE } from "./api/knowledge.js";
 const MODEL = "gemini-2.5-flash-lite";
 
 const ALLOWED_ORIGINS = [
+  "https://btmonika.pl",
+  "https://www.btmonika.pl",
   "https://btmonika.com",
   "https://www.btmonika.com",
   "http://localhost:3000"
@@ -14,7 +16,7 @@ function setCorsHeaders(req, res) {
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   } else {
-    res.setHeader("Access-Control-Allow-Origin", "https://www.btmonika.com");
+    res.setHeader("Access-Control-Allow-Origin", "https://www.btmonika.pl");
   }
 
   res.setHeader("Vary", "Origin");
