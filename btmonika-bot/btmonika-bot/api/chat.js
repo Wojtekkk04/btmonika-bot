@@ -1,6 +1,7 @@
 import { KNOWLEDGE } from "./api/knowledge.js";
 
-const MODEL = "gemini-2.5-flash-lite";
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
+const GROQ_MODEL = "llama-3.3-70b-versatile";
 
 const ALLOWED_ORIGINS = [
   "https://btmonika.pl",
@@ -24,205 +25,260 @@ function setCorsHeaders(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function normalizeHistory(history) {
+function cleanHistory(history, currentMessage) {
   if (!Array.isArray(history)) {
     return [];
   }
 
-  return history
-    .slice(-10)
+  const cleaned = history
     .filter((item) => item && typeof item.text === "string")
     .map((item) => ({
       role: item.role === "model" ? "model" : "user",
-      parts: [
-        {
-          text: item.text.slice(0, 2000)
-        }
-      ]
-    }));
+      text: item.text.trim().slice(0, 2000)
+    }))
+    .filter((item) => item.text.length > 0);
+
+  const lastItem = cleaned[cleaned.length - 1];
+
+  /*
+    Widget zapisuje wiadomość użytkownika do historii jeszcze przed wysłaniem requestu.
+    Gdybyśmy nic nie zrobili, ostatnie pytanie użytkownika trafiałoby do modelu podwójnie:
+    raz w "history", drugi raz jako aktualne "message".
+    Usuwamy więc duplikat ostatniej wiadomości.
+  */
+  if (
+    lastItem &&
+    lastItem.role === "user" &&
+    lastItem.text === currentMessage.trim()
+  ) {
+    cleaned.pop();
+  }
+
+  return cleaned.slice(-10);
+}
+
+function normalizeHistoryForGemini(history) {
+  return history.map((item) => ({
+    role: item.role === "model" ? "model" : "user",
+    parts: [
+      {
+        text: item.text
+      }
+    ]
+  }));
+}
+
+function normalizeHistoryForGroq(history) {
+  return history.map((item) => ({
+    role: item.role === "model" ? "assistant" : "user",
+    content: item.text
+  }));
 }
 
 function buildSystemPrompt() {
   return `
-Jesteś Asystentem BT Monika — pomocnym botem na stronie firmy przewozowej BT Monika.
+Jesteś wirtualnym asystentem strony internetowej BT Monika.
 
-Odpowiadasz użytkownikom strony na pytania związane z:
-- rozkładami jazdy,
-- godzinami odjazdów,
-- trasami,
-- przystankami,
-- biletami,
-- biletami miesięcznymi,
-- ulgami,
-- eKartą,
-- przewozami grupowymi,
-- wycieczkami,
-- wynajmem autobusów i busów,
-- zamówieniem przejazdu,
-- kontaktem z firmą.
+Odpowiadasz użytkownikom strony na pytania związane z firmą BT Monika, przewozami, biletami, rozkładami, wycieczkami, wynajmem autobusów i kontaktem.
 
 ODPOWIADAJ ZAWSZE PO POLSKU.
 
-==================================================
-NAJWAŻNIEJSZE ZASADY
-==================================================
-
+NAJWAŻNIEJSZE ZASADY:
 1. Odpowiadaj krótko, jasno, konkretnie i uprzejmie.
-2. Korzystaj przede wszystkim z bazy wiedzy podanej niżej.
-3. Nie wymyślaj informacji, których nie ma w bazie wiedzy.
-4. Nie podawaj zmyślonych cen, pojemności pojazdów, dostępności terminów ani danych spoza bazy.
-5. Nie potwierdzaj rezerwacji i nie udawaj, że możesz ją przyjąć.
-6. Nie obiecuj, że firma oddzwoni, jeśli system tego nie robi.
-7. Jeśli pytanie jest niezwiązane z BT Monika, odpowiedz krótko, że pomagasz głównie w sprawach dotyczących BT Monika.
-8. Nie zaczynaj każdej odpowiedzi od „Jako asystent”, „Jako sztuczna inteligencja” ani podobnych formuł.
-9. Jeśli nie masz dokładnej informacji, powiedz to uczciwie.
-10. Brzmij jak pomocny pracownik firmy transportowej, a nie jak sztywny automat.
+2. Korzystaj z bazy wiedzy podanej niżej.
+3. Nie wymyślaj cen, dokładnych godzin odjazdów, tras, numerów przystanków, dostępności pojazdów ani terminów, jeżeli nie ma ich w bazie wiedzy.
+4. Jeśli pytanie dotyczy rozkładu jazdy, najpierw spróbuj udzielić konkretnej odpowiedzi albo dopytać o brakujące informacje: skąd, dokąd i kiedy.
+5. Jeśli pytanie dotyczy ceny, dostępności terminu, rezerwacji lub indywidualnej wyceny, odpowiedz ostrożnie i skieruj do formularza „Zamów przejazd” lub kontaktu z firmą.
+6. Nie odsyłaj do telefonu, jeśli możesz normalnie odpowiedzieć z bazy wiedzy.
+7. Nie udawaj pracownika firmy, który może potwierdzić rezerwację.
+8. Nie obiecuj, że firma oddzwoni, jeśli system realnie nie wysyła zgłoszenia.
+9. Jeśli użytkownik pyta o coś niezwiązanego z BT Monika, odpowiedz krótko, że pomagasz głównie w sprawach związanych z przejazdami, biletami, rozkładami i usługami BT Monika.
+10. Nie zaczynaj każdej odpowiedzi od „Jako asystent” ani „Jako sztuczna inteligencja”.
+11. Jeśli nie masz dokładnej informacji, powiedz to uczciwie.
+12. Nie przepisuj długich fragmentów bazy wiedzy, tylko odpowiadaj naturalnie i praktycznie.
+13. Jeśli użytkownik pyta bardzo ogólnie, zadaj jedno krótkie pytanie doprecyzowujące, zamiast pisać długi wykład.
 
-==================================================
-BARDZO WAŻNE: ROZKŁADY JAZDY
-==================================================
-
-Masz w bazie wiedzy szczegółowe rozkłady jazdy BT Monika.
-
-Jeśli użytkownik pyta o:
-- godzinę autobusu,
-- kurs z konkretnej miejscowości,
-- połączenie między miejscowościami,
-- przystanek,
-- sobotnie odjazdy,
-- ostatni autobus,
-- trasę Skotniki / Szczecinek / Gwda / Czarne,
-
-NIE ODSYŁAJ GO OD RAZU DO ZAKŁADKI „ROZKŁADY JAZDY”.
-
-Najpierw postaraj się odpowiedzieć konkretnie na podstawie bazy wiedzy.
-
-==================================================
-JAK OBSŁUGIWAĆ PYTANIA O ROZKŁAD
-==================================================
-
-Do dobrej odpowiedzi o rozkładzie zwykle potrzebujesz:
-1. miejsca odjazdu,
-2. kierunku lub miejsca docelowego,
-3. informacji, czy chodzi o dzień powszedni czy sobotę,
-4. czasem konkretnego przystanku.
-
-Jeśli użytkownik nie poda wszystkich danych, zadaj JEDNO krótkie pytanie doprecyzowujące.
-
-Przykłady:
-
-Użytkownik:
-„O której jest autobus?”
-
-Odpowiedź:
-„Sprawdzę. Napisz proszę, skąd chcesz jechać, dokąd i czy chodzi o dzień powszedni czy sobotę.”
-
-Użytkownik:
-„Autobus z Czarnego”
-
-Odpowiedź:
-„Jasne — dokąd chcesz jechać: w stronę Gwdy, Szczecinka czy Skotnik? I chodzi o dzień powszedni czy sobotę?”
-
-Użytkownik:
-„Ze Szczecinka do Czarnego”
-
-Odpowiedź:
-„Tak, jest takie połączenie. Ze Szczecinka do Czarnego można jechać z kilku przystanków. Napisz proszę, z którego przystanku chcesz ruszyć i czy chodzi o dzień powszedni czy sobotę.”
-
-Użytkownik:
-„Z Czarnego do Szczecinka w sobotę”
-
-Odpowiedź:
-Podaj konkretne dostępne przystanki i godziny z bazy wiedzy.
-
-==================================================
-JAK FORMATOWAĆ ODPOWIEDZI Z GODZINAMI
-==================================================
-
-Gdy podajesz godziny, rób to czytelnie:
-- najpierw jedno krótkie zdanie,
-- potem lista przystanków i godzin,
-- bez długiego lania wody.
-
-Przykład stylu:
-„W sobotę z Czarnego w kierunku Szczecinka możesz jechać:
-- ul. Moniuszki, dworzec PKP: 09:05, 14:05
-- ul. Szczecinecka, osiedle WDM: 09:08, 14:08”
-
-Jeśli dla jakiegoś przystanku nie ma kursów w danym dniu, możesz to dodać krótko:
-„W bazie nie mam sobotnich kursów z ul. Strzeleckiej.”
-
-==================================================
-PRZYSTANKI O PODOBNYCH NAZWACH
-==================================================
-
-Jeśli użytkownik mówi tylko „Kościuszki”, pamiętaj, że są dwa różne przystanki:
-- Kościuszki II — kierunek Czarne,
-- Kościuszki III — kierunek Skotniki.
-
-Dopytaj, o który chodzi.
-
-Jeśli użytkownik mówi tylko „Szafera”, pamiętaj, że są dwa różne przystanki:
-- Szafera I — kierunek Czarne,
-- Szafera II — kierunek Skotniki.
-
-Dopytaj, o który chodzi.
-
-==================================================
-NIEDZIELE, ŚWIĘTA, OPÓŹNIENIA
-==================================================
-
-W bazie masz rozkłady dla:
-- dni powszednich,
-- sobót.
-
-Jeśli użytkownik pyta o niedzielę albo święto:
-powiedz, że w tej bazie masz rozkład dla dni powszednich i sobót oraz nie chcesz podać niepewnej informacji.
-
-Jeśli użytkownik pyta:
-- czy autobus dziś na pewno jedzie,
-- czy jest opóźniony,
-- czy kurs już odjechał,
-- czy są bieżące zmiany,
-
-powiedz, że nie masz podglądu na sytuację na żywo i w pilnej sprawie najlepiej zadzwonić: 605 551 105.
-
-==================================================
-CENY, REZERWACJE, WYCENY
-==================================================
-
-Jeśli użytkownik pyta o cenę biletu:
-- nie wymyślaj ceny,
-- powiedz, że nie masz aktualnej ceny konkretnej trasy,
-- podaj telefon 605 551 105.
-
-Jeśli użytkownik pyta o cenę wynajmu autobusu lub przejazdu grupowego:
-- wyjaśnij, że cena zależy od trasy, terminu, liczby osób i czasu przejazdu,
-- skieruj do formularza „Zamów przejazd” albo podaj telefon 605 551 105.
-
-Jeśli użytkownik chce zamówić przejazd:
-- nie potwierdzaj rezerwacji,
-- powiedz, że przejazd można zgłosić przez formularz „Zamów przejazd”,
-- możesz wskazać, jakie dane warto przygotować.
-
-==================================================
-ZASADA: NAJPIERW POMÓŻ, POTEM ODSYŁAJ
-==================================================
-
-Nie odsyłaj do strony lub telefonu, jeśli możesz odpowiedzieć z bazy wiedzy.
-
-Najpierw:
-- odpowiedz,
-- albo dopytaj o brakującą informację.
-
-Dopiero potem, jeśli temat wymaga indywidualnego potwierdzenia, podaj kontakt.
-
-==================================================
-BAZA WIEDZY
-==================================================
-
+BAZA WIEDZY:
 ${KNOWLEDGE}
 `;
+}
+
+function createProviderError(provider, status, message, details = null) {
+  const error = new Error(message);
+  error.provider = provider;
+  error.status = status;
+  error.details = details;
+  return error;
+}
+
+function shouldFallbackToGroq(error) {
+  if (!error) return true;
+
+  const fallbackStatuses = [408, 409, 425, 429, 500, 502, 503, 504];
+
+  if (fallbackStatuses.includes(error.status)) {
+    return true;
+  }
+
+  /*
+    Jeżeli wystąpił błąd sieciowy albo fetch nie zwrócił statusu,
+    też przechodzimy awaryjnie na Groq.
+  */
+  if (!error.status) {
+    return true;
+  }
+
+  return false;
+}
+
+async function askGemini({ apiKey, message, history }) {
+  if (!apiKey) {
+    throw createProviderError(
+      "gemini",
+      null,
+      "Brakuje GEMINI_API_KEY w ustawieniach Vercel."
+    );
+  }
+
+  const contents = normalizeHistoryForGemini(history);
+
+  contents.push({
+    role: "user",
+    parts: [
+      {
+        text: message.trim()
+      }
+    ]
+  });
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [
+            {
+              text: buildSystemPrompt()
+            }
+          ]
+        },
+        contents,
+        generationConfig: {
+          temperature: 0.25,
+          maxOutputTokens: 700
+        }
+      })
+    }
+  );
+
+  let data = {};
+
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = {};
+  }
+
+  if (!response.ok) {
+    throw createProviderError(
+      "gemini",
+      response.status,
+      data?.error?.message || "Błąd połączenia z Gemini.",
+      data
+    );
+  }
+
+  const reply =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || "")
+      .join("")
+      .trim() || "";
+
+  if (!reply) {
+    throw createProviderError(
+      "gemini",
+      502,
+      "Gemini nie zwrócił poprawnej odpowiedzi.",
+      data
+    );
+  }
+
+  return reply;
+}
+
+async function askGroq({ apiKey, message, history }) {
+  if (!apiKey) {
+    throw createProviderError(
+      "groq",
+      null,
+      "Brakuje GROQ_API_KEY w ustawieniach Vercel."
+    );
+  }
+
+  const messages = [
+    {
+      role: "system",
+      content: buildSystemPrompt()
+    },
+    ...normalizeHistoryForGroq(history),
+    {
+      role: "user",
+      content: message.trim()
+    }
+  ];
+
+  const response = await fetch(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages,
+        temperature: 0.25,
+        max_completion_tokens: 700
+      })
+    }
+  );
+
+  let data = {};
+
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = {};
+  }
+
+  if (!response.ok) {
+    throw createProviderError(
+      "groq",
+      response.status,
+      data?.error?.message || "Błąd połączenia z Groq.",
+      data
+    );
+  }
+
+  const reply =
+    data?.choices?.[0]?.message?.content?.trim() || "";
+
+  if (!reply) {
+    throw createProviderError(
+      "groq",
+      502,
+      "Groq nie zwrócił poprawnej odpowiedzi.",
+      data
+    );
+  }
+
+  return reply;
 }
 
 export default async function handler(req, res) {
@@ -239,15 +295,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
-      console.error("Missing GEMINI_API_KEY");
-
-      return res.status(500).json({
-        error: "Brakuje GEMINI_API_KEY w ustawieniach Vercel."
-      });
-    }
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const groqApiKey = process.env.GROQ_API_KEY;
 
     const { message, history } = req.body || {};
 
@@ -257,68 +306,85 @@ export default async function handler(req, res) {
       });
     }
 
-    if (message.length > 1500) {
+    const trimmedMessage = message.trim();
+
+    if (!trimmedMessage) {
+      return res.status(400).json({
+        error: "Wiadomość użytkownika jest pusta."
+      });
+    }
+
+    if (trimmedMessage.length > 1500) {
       return res.status(400).json({
         error: "Wiadomość jest za długa."
       });
     }
 
-    const contents = normalizeHistory(history);
+    const cleanedHistory = cleanHistory(history, trimmedMessage);
 
-    contents.push({
-      role: "user",
-      parts: [
-        {
-          text: message.trim()
-        }
-      ]
-    });
+    /*
+      1. Najpierw próbujemy Gemini.
+      2. Jeśli Gemini odpowie — kończymy.
+      3. Jeśli Gemini padnie przez przeciążenie, limit, timeout albo błąd serwera —
+         przełączamy się awaryjnie na Groq.
+    */
 
-    const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [
-              {
-                text: buildSystemPrompt()
-              }
-            ]
-          },
-          contents,
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 1000
-          }
-        })
-      }
-    );
-
-    const data = await geminiResponse.json();
-
-    if (!geminiResponse.ok) {
-      console.error("Gemini error:", JSON.stringify(data));
-
-      return res.status(500).json({
-        error: "Błąd połączenia z Gemini.",
-        details: data?.error?.message || "Nieznany błąd Gemini."
+    try {
+      const geminiReply = await askGemini({
+        apiKey: geminiApiKey,
+        message: trimmedMessage,
+        history: cleanedHistory
       });
+
+      console.log("BT Monika AI provider: Gemini");
+
+      return res.status(200).json({
+        reply: geminiReply,
+        provider: "gemini"
+      });
+    } catch (geminiError) {
+      console.error("Gemini error:", {
+        status: geminiError?.status || null,
+        message: geminiError?.message || "Nieznany błąd Gemini.",
+        details: geminiError?.details || null
+      });
+
+      if (!shouldFallbackToGroq(geminiError)) {
+        return res.status(500).json({
+          error: "Błąd połączenia z Gemini.",
+          details: geminiError?.message || "Nieznany błąd Gemini."
+        });
+      }
+
+      console.warn("Przełączam odpowiedź na Groq fallback.");
     }
 
-    const reply =
-      data?.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text || "")
-        .join("")
-        .trim() || "Przepraszam, nie udało się przygotować odpowiedzi.";
+    try {
+      const groqReply = await askGroq({
+        apiKey: groqApiKey,
+        message: trimmedMessage,
+        history: cleanedHistory
+      });
 
-    return res.status(200).json({
-      reply
-    });
+      console.log("BT Monika AI provider: Groq fallback");
+
+      return res.status(200).json({
+        reply: groqReply,
+        provider: "groq"
+      });
+    } catch (groqError) {
+      console.error("Groq fallback error:", {
+        status: groqError?.status || null,
+        message: groqError?.message || "Nieznany błąd Groq.",
+        details: groqError?.details || null
+      });
+
+      return res.status(500).json({
+        error: "Czat chwilowo nie działa.",
+        details:
+          "Nie udało się uzyskać odpowiedzi ani z Gemini, ani z systemu awaryjnego Groq."
+      });
+    }
   } catch (error) {
     console.error("Server error:", error);
 
